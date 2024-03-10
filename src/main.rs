@@ -1,40 +1,76 @@
-use native_tls;
-use std::net::TcpStream;
-use tungstenite::{client_tls_with_config, Connector, Message};
+//! A simple example of hooking up stdin/stdout to a WebSocket stream.
+//!
+//! This example will connect to a server specified in the argument list and
+//! then forward all data read on stdin to the server, printing out all data
+//! received on stdout.
+//!
+//! Note that this is not currently optimized for performance, especially around
+//! buffer management. Rather it's intended to show an example of working with a
+//! client.
+//!
+//! You can use this example together with the `server` example.
 
-fn main() {
-    env_logger::init();
+use futures_util::{SinkExt, StreamExt};
+use tokio_native_tls::native_tls::TlsConnector;
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::protocol::Message, Connector};
 
-    let cert_bytes =
-        include_bytes!("../../../kong/koko-wd/internal/certs/clusters/mtls/foo/cluster.crt");
-    let key_bytes =
-        include_bytes!("../../../kong/koko-wd/internal/certs/clusters/mtls/foo/cluster.key");
-    let identity =
-        native_tls::Identity::from_pkcs8(cert_bytes, key_bytes).expect("Error creating identity");
-    let connector = native_tls::TlsConnector::builder()
+#[tokio::main]
+async fn main() {
+    let identity = tokio_native_tls::native_tls::Identity::from_pkcs8(
+        &std::fs::read("./foo/cluster.crt").unwrap(),
+        &std::fs::read("./foo/cluster.key").unwrap(),
+    )
+    .unwrap();
+    let connector = TlsConnector::builder()
         .identity(identity)
+        .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
+    let connector = Connector::NativeTls(connector);
+    // Connect to the WebSocket server
+    let (mut ws_stream, _) = connect_async_tls_with_config(
+        "wss://foo-pinned.koko.localhost:3100/v1/outlet?node_id=93FD3924-526C-4B39-BF83-16CCF5F55D18&node_hostname=localhost&node_version=3.6.0.0",
+        None,
+        false,
+        Option::from(connector),
+    )
+    .await
+    .expect("Failed to connect");
 
-    let stream = TcpStream::connect("foo-pinned.koko.localhost:3100").unwrap();
-    let connector: Connector = Connector::NativeTls(connector);
+    println!("Connected to server");
 
-    let (mut  socket, response)= client_tls_with_config("wss://foo-pinned.koko.localhost:3100/v1/outlet?node_hostname=localhost&node_id=00000000-0000-4000-8000-000000000001&node_version=3.6.0.0", stream, None, Some(connector)).unwrap();
-
-    println!("Connected to the server");
-    println!("Response HTTP code: {}", response.status());
-    println!("Response contains the following headers:");
-    for (ref header, _value) in response.headers() {
-        println!("* {}", header);
-    }
-
-    socket
-        .send(Message::Text("Hello WebSocket".into()))
+    ws_stream
+        .send(Message::Text("Hello server".into()))
+        .await
         .unwrap();
-    loop {
-        let msg = socket.read().expect("Error reading message");
-        println!("Received: {}", msg);
-    }
-    // socket.close(None);
-}
+    // Send a message to the server
 
+    println!("Message sent to server");
+
+    // Receive messages from the server
+    while let Some(Ok(message)) = ws_stream.next().await {
+        match message {
+            Message::Text(text) => {
+                println!("Received text message: {}", text);
+            }
+            Message::Binary(data) => {
+                println!("Received binary message: {:?}", data);
+            }
+            Message::Ping(_) => {
+                println!("Received ping");
+            }
+            Message::Pong(_) => {
+                println!("Received pong");
+            }
+            Message::Frame(_) => {
+                println!("Received a frame");
+            }
+            Message::Close(_) => {
+                println!("Received close message");
+                break;
+            }
+        }
+    }
+
+    println!("Connection closed");
+}
