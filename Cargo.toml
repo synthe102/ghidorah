@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+flate2 = "1.0.28"
 futures-channel = "0.3.30"
 futures-util = "0.3.30"
 tokio = { version = "1.36.0", features = ["full"] }
